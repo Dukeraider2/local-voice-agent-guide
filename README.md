@@ -41,6 +41,12 @@ The current [audio.cpp project](https://github.com/0xShug0/audio.cpp) documents 
 
 See the upstream [HIP/ROCm build guide](https://github.com/0xShug0/audio.cpp/blob/main/docs/build/HIP.md).
 
+## Mon Capitan: memorial voice and teaching initiative
+
+The project also defines **Mon Capitan**, an original local AI voice persona and teaching framework created in tribute to Sir Patrick Stewart and the example many viewers found in his portrayal of Captain Jean-Luc Picard. It is an homage to the influence of the performances, not a recreation or impersonation of Stewart or Picard. The persona uses an original voice design, with no unauthorized voice cloning, and teaches through integrity, compassion, reason, curiosity, diplomacy, courage, accountability, and respect for human dignity.
+
+See the [Mon Capitan Charter](MON_CAPITAN_CHARTER.md) for its voice specification, teaching principles, behavioral requirements, evaluation criteria, and attribution rules. This is a design standard; implementation and voice qualification remain pending.
+
 ## Current status
 
 - **Architecture selected:** audio.cpp HIP/ROCm as the first inference-engine candidate.
