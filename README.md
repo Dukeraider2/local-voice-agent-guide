@@ -1,99 +1,89 @@
-# Local voice agent: video reproduction guide
+# Local ROCm Voice Inference Gateway
 
-A practical reproduction of the local voice-agent setup described in [“How I Built an End-to-End Local Voice Agent, and Made It Fast”](https://www.youtube.com/watch?v=xbedfuqYQYA).
+A Podman-first local speech inference project targeting AMD GPUs, beginning with the Framework Desktop AI Max 395 / Radeon 8060S (`gfx1151`).
 
-This guide uses the creator's open-source [Pithagoras](https://github.com/thecodacus/Pithagoras) project for the agent UI and orchestration, with its local Voice service for speech recognition and synthesis. It is a reproducible deployment guide, not a fork or replacement of Pithagoras.
+## Current project standard
 
-## What you will run
+**The project's primary scope is now a ROCm/HIP-accelerated local speech inference service.** This replaces the earlier primary focus on converting the Pithagoras deployment guide from Docker to Podman.
+
+The implementation standard is:
+
+1. Verify the target host's ROCm/HIP stack and GPU architecture.
+2. Prove native HIP inference with a pinned audio.cpp revision.
+3. Qualify ASR and TTS models with correctness and performance measurements.
+4. Expose a stable local HTTP inference API.
+5. Package the validated service with Podman.
+6. Integrate Pithagoras, Hermes, and other agents as API clients.
+
+The canonical scope, architecture, phases, engineering rules, and acceptance criteria are maintained in [PROJECT_SCOPE.md](PROJECT_SCOPE.md). Changes to implementation should follow that document.
+
+## Architecture at a glance
 
 ```text
-Microphone → VAD / turn detection → Whisper STT → local LLM → streamed response text
-                                                        ↓
-Speaker ← queued audio playback ← Breeze TTS 2 (Q8)
+Pithagoras / Hermes / other clients
+                 |
+              HTTP API
+                 |
+       Local Speech Gateway
+                 |
+             audio.cpp
+              /     \
+         HIP/ROCm   CPU fallback
+             |
+      Radeon 8060S (gfx1151)
+                 |
+        Podman deployment
 ```
 
-The video reports a single-GPU target around 12 GB VRAM, Whisper, Breeze TTS 2, and a Qwen mixture-of-experts model. The speech stack runs locally; the LLM is configured as a local provider such as Ollama or llama.cpp. Model sizing and speed depend on GPU, system RAM, quantization, and context length. The upstream Pithagoras project and current voice service versions can differ from the video build.
+## Why audio.cpp
 
-## Requirements
+The current [audio.cpp project](https://github.com/0xShug0/audio.cpp) documents a native HIP/ROCm backend, an HTTP server, and a broad set of speech/audio model families. Its HIP guide explicitly lists `gfx1151` as a supported architecture. That is promising architecture-level evidence, not a guarantee that every model or the host's currently installed ROCm version will work. Local build, runtime, model, and performance validation are mandatory.
 
-- Windows 11, Linux, or macOS with Docker Engine / Docker Desktop and Docker Compose.
-- NVIDIA GPU + NVIDIA Container Toolkit for Breeze TTS 2 on GPU. Without supported NVIDIA GPU access, use the documented CPU-compatible Kokoro speech option; Whisper recognition can run without GPU.
-- A local LLM server (for example Ollama or llama.cpp) with a model that fits your machine. Keep a smaller context initially; increase it only after measuring memory use.
-- Microphone and speakers/headphones.
+See the upstream [HIP/ROCm build guide](https://github.com/0xShug0/audio.cpp/blob/main/docs/build/HIP.md).
 
-On Windows, Docker Desktop runs Pithagoras in a Linux container. The project's Compose configuration uses host networking, so follow its current Windows/Docker networking notes if the container cannot reach the local model server.
+## Current status
 
-## Install Pithagoras
+- **Architecture selected:** audio.cpp HIP/ROCm as the first inference-engine candidate.
+- **GPU target:** `gfx1151` (Radeon 8060S).
+- **Deployment target:** Podman.
+- **Host validation:** pending diagnostic output from the target machine.
+- **Native HIP build:** not yet performed.
+- **ASR/TTS qualification:** not yet performed.
+- **Podman GPU runtime validation:** not yet performed.
+- **Agent integration:** not yet performed.
 
-Follow the current upstream deployment instructions. Basic Linux/macOS path:
+Do not interpret this README or upstream architecture support as a claim that the system is already working.
 
-```bash
-git clone https://github.com/thecodacus/Pithagoras.git
-cd Pithagoras
-cp .env.example .env
-```
+## First implementation gate
 
-Edit `.env` and set `WORKSPACES_DIR` to a folder for your projects. Set `PORTAL_SECRET` to a newly generated random secret (for example, `openssl rand -hex 32`); do not commit `.env`. Then start the portal:
+Before changing the host, inspect and record:
 
-```bash
-docker compose up -d --build
-```
+- Ubuntu and kernel versions.
+- ROCm and HIP versions.
+- `rocminfo` GPU agent and `gfx1151` target.
+- HIP compiler version.
+- hipBLAS, rocBLAS, and hipBLASLt library availability.
 
-Open `http://localhost:4100` immediately and set the portal password before allowing other devices onto the network. In **Settings → Providers**, connect the local LLM endpoint. Do not expose this single-user portal directly to the public internet; use localhost or a private VPN.
+Then compare those facts against the pinned audio.cpp revision's build requirements. Do not upgrade ROCm or install packages until that comparison is complete.
 
-For Windows, use PowerShell for the clone and `Copy-Item .env.example .env`; edit `.env` with a text editor and use an absolute Windows path for `WORKSPACES_DIR`. Docker Desktop must be configured for Linux containers. Check the upstream deploy guide for current host networking and GPU passthrough steps.
+## Previous Podman/Pithagoras work
 
-## Install the local voice service
+The earlier Docker-to-Podman compatibility work is retained as a secondary, optional portal deployment experiment:
 
-1. In Pithagoras, open **Settings → Extensions** and install/enable **Docker** and **Voice** if they are not already enabled.
-2. Open the **Voice** extension and install the voice service with **Whisper** (start with `base` for lower resource use or `small` for better accuracy) and **Breeze TTS 2**.
-3. Let the setup finish. The service builds the pinned audio runtime and downloads models into its persistent Docker volume. The first setup can take a while.
-4. In the service's **Your voice** settings, choose an input language and voice. Start with **Fast speech generation** and **Lazy load** enabled.
-5. Open a chat, start voice mode, grant microphone access to localhost, and speak. Verify one short turn before tuning performance.
+- [Podman compatibility review](PODMAN_COMPATIBILITY_REVIEW.md)
+- [Podman Compose override](compose.podman.yaml)
 
-For a host without NVIDIA GPU access, choose Kokoro and CPU recognition where offered. Breeze requires supported NVIDIA GPU access in the current managed service. Engine choices and hardware estimates are shown by the installer; check them before rebuilding an existing service.
+That socket-compatibility route is **not** the AMD speech acceleration architecture. Pithagoras' current managed Voice extension uses Docker Engine API operations and NVIDIA-specific `DeviceRequests`; it should not be treated as a native ROCm path. The new design runs the speech engine as its own service and connects Pithagoras to it over HTTP.
 
-## Tune for responsiveness
+## Project rules
 
-Apply one change at a time and record the delay from end-of-speech to first audible reply.
+- Podman-first. Do not install Docker as a workaround.
+- Verify official documentation and actual host state before commands.
+- One copy-and-paste command at a time; inspect output before proceeding.
+- Pin upstream revisions and model versions.
+- Measure CPU/HIP correctness, latency, throughput, and resource use.
+- Preserve CPU fallback when GPU execution is unsupported or slower.
+- Do not claim GPU acceleration until runtime diagnostics prove HIP is active.
+- Keep endpoints local or private-tailnet by default.
 
-1. **Stream in phrases.** Keep response streaming and phrase-sized TTS enabled so speech can begin before the model finishes its full answer.
-2. **Keep audio queued.** Use the service's streaming Breeze path. Playback should consume each completed audio chunk while the next chunk is synthesized.
-3. **Avoid GPU contention.** Breeze can dominate VRAM. Start with Fast mode and Lazy load; reduce LLM context or model size if audio generation fails or stalls.
-4. **Choose context deliberately.** Begin at a modest context setting, then increase it while watching VRAM headroom. The video describes reducing context to fit both speech and LLM workloads.
-5. **Keep spoken turns short.** Configure the agent to answer briefly in voice mode and announce tool work before doing it. This keeps tool latency from feeling like an audio failure.
-6. **Use turn detection.** Tune VAD/end-of-turn silence conservatively so a short pause does not cut off the speaker. The video describes roughly one second of trailing silence.
-7. **Measure the real pipeline.** Use Pithagoras' voice latency profiling and pipeline switches to locate time spent in endpointing, STT, LLM first token, TTS first chunk, and playback. Compare warm and cold starts separately.
-
-The video reports improving subsequent-turn latency from about eight seconds to roughly two–three seconds on its own hardware and software revision. Treat that as a reference result, not a guarantee.
-
-## Verify each stage
-
-- **LLM:** send a text chat and confirm it responds from the configured local provider.
-- **STT:** use voice dictation and confirm the recognized text appears before testing speech replies.
-- **TTS:** generate a short spoken reply and confirm audio plays.
-- **Full loop:** speak a short question, wait for end-of-turn, and confirm the transcript and spoken answer match.
-- **Locality:** run without internet after models are downloaded and confirm the already-configured models still respond. Initial image/container/model downloads require internet.
-
-## Troubleshooting
-
-- **Voice says service is unavailable:** check Docker is running and inspect `docker logs --tail 100 pithagoras-voice`.
-- **GPU not detected:** verify NVIDIA drivers, NVIDIA Container Toolkit, and `docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi` per the upstream guide.
-- **Model allocation failure:** close duplicate voice services, reduce LLM context or model size, use Fast speech generation, and leave VRAM reserve.
-- **Long initial pause:** separate cold model load from warm-turn timing; then inspect voice latency profiling before changing model settings.
-- **Microphone permission missing:** use `http://localhost:4100` and allow the browser's microphone prompt.
-
-## Sources
-
-- Video: [How I Built an End-to-End Local Voice Agent, and Made It Fast](https://www.youtube.com/watch?v=xbedfuqYQYA)
-- Upstream code: [thecodacus/Pithagoras](https://github.com/thecodacus/Pithagoras)
-- [Pithagoras deployment guide](https://thecodacus.github.io/pithagoras/guide/deploying)
-- [Pithagoras voice service guide](https://thecodacus.github.io/pithagoras/guide/voice-service)
-- [Pithagoras voice latency profiling](https://thecodacus.github.io/pithagoras/guide/voice-latency-profiling)
-- [Video research notes](VIDEO_NOTES.md)
-- [Transcript retrieval status](TRANSCRIPT_STATUS.md)
-
-## License and attribution
-
-This guide is original documentation based on the linked video and public Pithagoras documentation. Pithagoras is a separate upstream project; see its repository for its code and license. Video transcript text is not included.
-
+See [PROJECT_SCOPE.md](PROJECT_SCOPE.md) for the full engineering standard and acceptance gates.

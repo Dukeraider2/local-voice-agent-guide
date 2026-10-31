@@ -1,0 +1,18 @@
+# Experimental rootless Podman override for upstream Pithagoras docker-compose.yml.
+# Run:
+#   podman compose -f docker-compose.yml -f compose.podman.yaml up -d --build
+#
+# .env must define PODMAN_SOCKET_PATH, normally:
+#   /run/user/<uid>/podman/podman.sock
+#
+# This only supplies Podman's Docker-compatible API socket. It does not prove that
+# every Docker Engine API operation used by Pithagoras is supported by Podman.
+
+services:
+  portal:
+    volumes:
+      - ${PODMAN_SOCKET_PATH:?Set PODMAN_SOCKET_PATH to the rootless Podman socket}:/var/run/docker.sock
+    environment:
+      DOCKER_SOCKET: /var/run/docker.sock
+    security_opt:
+      - label=disable
