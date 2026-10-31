@@ -56,7 +56,7 @@ Follow [Pithagoras' deployment guide](https://thecodacus.github.io/pithagoras/gu
    podman compose -f docker-compose.yml -f compose.podman.yaml up -d --build
    ```
 
-5. Check the portal:
+6. Check the portal:
 
    ```bash
    podman ps
