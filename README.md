@@ -1,134 +1,89 @@
-# Local voice agent: Podman-first reproduction guide
+# Local ROCm Voice Inference Gateway
 
-A practical reproduction guide for the local voice-agent workflow described in [“How I Built an End-to-End Local Voice Agent, and Made It Fast”](https://www.youtube.com/watch?v=xbedfuqYQYA), using the upstream [Pithagoras](https://github.com/thecodacus/pithagoras) project.
+A Podman-first local speech inference project targeting AMD GPUs, beginning with the Framework Desktop AI Max 395 / Radeon 8060S (`gfx1151`).
 
-> **Compatibility status:** The portal can be launched with Podman Compose, and Podman's API offers a Docker-compatible endpoint. However, Pithagoras' managed Voice extension is explicitly written against the Docker Engine API. This repository documents an **experimental Podman compatibility path**, not a fully upstream-supported or end-to-end validated Podman port. The reliable target for this first pass is CPU speech (Kokoro + Whisper). NVIDIA GPU speech through the managed Voice extension is not claimed to work.
+## Current project standard
 
-## What you will run
+**The project's primary scope is now a ROCm/HIP-accelerated local speech inference service.** This replaces the earlier primary focus on converting the Pithagoras deployment guide from Docker to Podman.
+
+The implementation standard is:
+
+1. Verify the target host's ROCm/HIP stack and GPU architecture.
+2. Prove native HIP inference with a pinned audio.cpp revision.
+3. Qualify ASR and TTS models with correctness and performance measurements.
+4. Expose a stable local HTTP inference API.
+5. Package the validated service with Podman.
+6. Integrate Pithagoras, Hermes, and other agents as API clients.
+
+The canonical scope, architecture, phases, engineering rules, and acceptance criteria are maintained in [PROJECT_SCOPE.md](PROJECT_SCOPE.md). Changes to implementation should follow that document.
+
+## Architecture at a glance
 
 ```text
-Microphone → VAD / turn detection → Whisper or Qwen3-ASR → local LLM → streamed response text
-                                                                  ↓
-Speaker ← queued audio playback ← Kokoro / Breeze / Chatterbox
+Pithagoras / Hermes / other clients
+                 |
+              HTTP API
+                 |
+       Local Speech Gateway
+                 |
+             audio.cpp
+              /     \
+         HIP/ROCm   CPU fallback
+             |
+      Radeon 8060S (gfx1151)
+                 |
+        Podman deployment
 ```
 
-The video describes a local Qwen-family LLM, Whisper, Breeze TTS 2, Silero VAD, and phrase-streamed speech. Current Pithagoras has evolved: its managed Voice extension supports Breeze, Chatterbox or Kokoro for speech synthesis and Whisper or Qwen3-ASR for recognition. The current extension builds its speech runtime and downloads models inside a separate container.
+## Why audio.cpp
 
-## Requirements
+The current [audio.cpp project](https://github.com/0xShug0/audio.cpp) documents a native HIP/ROCm backend, an HTTP server, and a broad set of speech/audio model families. Its HIP guide explicitly lists `gfx1151` as a supported architecture. That is promising architecture-level evidence, not a guarantee that every model or the host's currently installed ROCm version will work. Local build, runtime, model, and performance validation are mandatory.
 
-- Linux host with Podman and a Compose provider supported by `podman compose`.
-- A local LLM server such as Ollama or llama.cpp, with a model sized for the machine.
-- Microphone and speakers/headphones.
-- For the experimental managed-Voice path: a running Podman API socket with Docker API compatibility. Rootless Podman is preferred where the required host paths and permissions work.
-- Internet access for the initial image, source, package and model downloads.
+See the upstream [HIP/ROCm build guide](https://github.com/0xShug0/audio.cpp/blob/main/docs/build/HIP.md).
 
-**Important:** Do not install Docker as a workaround. If the Podman compatibility checks fail, stop and record the failing API operation rather than switching runtimes silently.
+## Current status
 
-## Install the Pithagoras portal with Podman
+- **Architecture selected:** audio.cpp HIP/ROCm as the first inference-engine candidate.
+- **GPU target:** `gfx1151` (Radeon 8060S).
+- **Deployment target:** Podman.
+- **Host validation:** pending diagnostic output from the target machine.
+- **Native HIP build:** not yet performed.
+- **ASR/TTS qualification:** not yet performed.
+- **Podman GPU runtime validation:** not yet performed.
+- **Agent integration:** not yet performed.
 
-Follow [Pithagoras' deployment guide](https://thecodacus.github.io/pithagoras/guide/deploying) for the current upstream release. This repository includes a Compose override at [compose.podman.yaml](compose.podman.yaml) for the rootless Podman socket.
+Do not interpret this README or upstream architecture support as a claim that the system is already working.
 
-1. Start the rootless Podman socket for your user:
+## First implementation gate
 
-   ```bash
-   systemctl --user enable --now podman.socket
-   ```
+Before changing the host, inspect and record:
 
-2. Confirm the socket exists and answers:
+- Ubuntu and kernel versions.
+- ROCm and HIP versions.
+- `rocminfo` GPU agent and `gfx1151` target.
+- HIP compiler version.
+- hipBLAS, rocBLAS, and hipBLASLt library availability.
 
-   ```bash
-   test -S "$XDG_RUNTIME_DIR/podman/podman.sock" && podman --remote info
-   ```
+Then compare those facts against the pinned audio.cpp revision's build requirements. Do not upgrade ROCm or install packages until that comparison is complete.
 
-3. Create the upstream `.env` file. Set `WORKSPACES_DIR` to a real host directory and generate a unique portal secret:
+## Previous Podman/Pithagoras work
 
-   ```bash
-   mkdir -p "$HOME/pithagoras-workspaces"
-   printf "WORKSPACES_DIR='%s'\nPORTAL_SECRET=%s\nPODMAN_SOCKET_PATH=%s\n" "$HOME/pithagoras-workspaces" "$(openssl rand -hex 32)" "$XDG_RUNTIME_DIR/podman/podman.sock" > .env
-   chmod 600 .env
-   ```
+The earlier Docker-to-Podman compatibility work is retained as a secondary, optional portal deployment experiment:
 
-   Run this from the Pithagoras checkout directory. Review the generated `.env`; never commit it.
+- [Podman compatibility review](PODMAN_COMPATIBILITY_REVIEW.md)
+- [Podman Compose override](compose.podman.yaml)
 
-4. Render and inspect the merged configuration before starting anything. Confirm the portal service has the rootless Podman socket mounted at `/var/run/docker.sock`, `DOCKER_SOCKET=/var/run/docker.sock`, and `label=disable`:
+That socket-compatibility route is **not** the AMD speech acceleration architecture. Pithagoras' current managed Voice extension uses Docker Engine API operations and NVIDIA-specific `DeviceRequests`; it should not be treated as a native ROCm path. The new design runs the speech engine as its own service and connects Pithagoras to it over HTTP.
 
-   ```bash
-   podman compose -f docker-compose.yml -f compose.podman.yaml config
-   ```
+## Project rules
 
-   If the rendered configuration still mounts the host Docker socket, stop and do not launch it.
+- Podman-first. Do not install Docker as a workaround.
+- Verify official documentation and actual host state before commands.
+- One copy-and-paste command at a time; inspect output before proceeding.
+- Pin upstream revisions and model versions.
+- Measure CPU/HIP correctness, latency, throughput, and resource use.
+- Preserve CPU fallback when GPU execution is unsupported or slower.
+- Do not claim GPU acceleration until runtime diagnostics prove HIP is active.
+- Keep endpoints local or private-tailnet by default.
 
-5. Launch with the Podman override:
-
-   ```bash
-   podman compose -f docker-compose.yml -f compose.podman.yaml up -d --build
-   ```
-
-6. Check the portal:
-
-   ```bash
-   podman ps
-   podman logs --tail 100 pithagoras
-   ```
-
-Open `http://localhost:4100`, set the portal password, and connect the local LLM provider in **Settings → Providers**. Keep the portal on localhost or a private VPN. Do not expose it publicly.
-
-The override replaces the upstream Docker socket bind with the rootless Podman socket, sets `DOCKER_SOCKET`, and disables SELinux labeling for the socket mount as required by Podman's documentation. The socket grants broad control over the user's Podman containers and files. Treat access to it as privileged.
-
-## Managed Voice extension: experimental Podman compatibility
-
-The upstream Voice extension depends on `pithagoras-docker`. Its source constructs Docker Engine API requests directly, including container create/inspect/start/stop, image pulls, volume operations, and a container network namespace shared with the portal. Podman's API exposes a Docker-compatible API, but that does not guarantee every Docker API field or behavior used by Pithagoras is implemented identically.
-
-For the first compatibility test:
-
-1. In Pithagoras, open **Settings → Extensions → Discover** and install **Docker** and **Voice**.
-2. Verify the Docker extension reports the Podman API as available. A socket file existing is not enough; the API ping must succeed.
-3. Choose CPU-compatible speech engines first: **Kokoro (CPU)** for synthesis and **Whisper (CPU)** for recognition. Do not select Breeze or Chatterbox GPU mode for this Podman test.
-4. Install Voice and inspect its setup log.
-5. Verify that the voice container starts, its health endpoints respond, and a short speech round-trip works.
-
-If the extension reports Docker unavailable, fails to create the voice container, cannot share the portal network namespace, or fails to mount its named volume, stop there. Capture the exact API error and Podman version. Do not delete existing volumes or containers as a troubleshooting shortcut.
-
-### GPU limitation
-
-The current Pithagoras Voice source requests NVIDIA GPUs using Docker's `HostConfig.DeviceRequests` field and probes GPU access by creating a temporary container with the same Docker-specific request. Podman supports GPU access through its own mechanisms, including CDI, but the upstream extension does not currently expose a Podman-specific CDI configuration. Therefore GPU acceleration through the managed Voice extension is **not validated** by this guide. A real GPU port requires an upstream adapter or a tested compatibility implementation, plus a complete rebuild and GPU validation.
-
-For the Framework Desktop AI Max 395 / Radeon 8060S environment, do not assume the NVIDIA/CUDA voice path is applicable. A separate ROCm-compatible speech stack or CPU Kokoro route needs its own validation.
-
-## Verify each stage
-
-- **Portal:** Pithagoras is running and the UI loads.
-- **Container API:** Docker extension reports available through the Podman socket.
-- **LLM:** text chat returns from the configured local provider.
-- **STT:** a short spoken phrase produces a transcript.
-- **TTS:** a short response produces audible output.
-- **Full loop:** ask one short question and verify transcript and spoken response.
-- **Persistence:** restart the portal and confirm settings and workspace mounts remain.
-- **Locality:** after initial downloads, disconnect internet and confirm already-installed models still work.
-
-Record Podman version, Compose provider/version, Pithagoras commit, selected engines, CPU/RAM/GPU use, setup errors, and measured end-of-speech-to-first-audio latency.
-
-## Troubleshooting
-
-- **Socket missing:** check `systemctl --user status podman.socket` and `$XDG_RUNTIME_DIR/podman/podman.sock`.
-- **API unavailable:** verify the socket is mounted at `/var/run/docker.sock` inside the portal and `DOCKER_SOCKET=/var/run/docker.sock` is set.
-- **Permission/SELinux error:** confirm the socket mount and `security_opt: label=disable` override. Do not make the socket world-writable.
-- **Voice container creation fails:** capture the exact Podman API response. Likely compatibility points include Docker API fields, container namespace sharing, volume operations, and GPU DeviceRequests.
-- **No GPU detected:** this is expected for the current unported NVIDIA DeviceRequests path. Use the CPU-compatible engine selection; do not infer that the host GPU itself is unavailable.
-- **Microphone permission missing:** use localhost or HTTPS and allow microphone access in the browser.
-
-## Sources
-
-- Video: [How I Built an End-to-End Local Voice Agent, and Made It Fast](https://www.youtube.com/watch?v=xbedfuqYQYA)
-- Upstream project: [thecodacus/Pithagoras](https://github.com/thecodacus/pithagoras)
-- [Pithagoras deployment guide](https://thecodacus.github.io/pithagoras/guide/deploying)
-- [Pithagoras voice service guide](https://thecodacus.github.io/pithagoras/guide/voice-service)
-- [Pithagoras Docker extension guide](https://thecodacus.github.io/pithagoras/guide/docker)
-- [Podman system service and Docker API compatibility](https://docs.podman.io/en/latest/markdown/podman-system-service.1.html)
-- [Podman Compose](https://docs.podman.io/en/latest/markdown/podman-compose.1.html)
-- [Video research notes](VIDEO_NOTES.md)
-- [Transcript retrieval status](TRANSCRIPT_STATUS.md)
-
-## License and attribution
-
-This repository contains original documentation and a Compose override for experimenting with Podman's Docker-compatible API. Pithagoras is a separate upstream project; consult its repository for its code and license. This guide does not modify or redistribute Pithagoras source code.
+See [PROJECT_SCOPE.md](PROJECT_SCOPE.md) for the full engineering standard and acceptance gates.
