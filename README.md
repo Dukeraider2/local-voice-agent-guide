@@ -50,7 +50,15 @@ Follow [Pithagoras' deployment guide](https://thecodacus.github.io/pithagoras/gu
 
    Run this from the Pithagoras checkout directory. Review the generated `.env`; never commit it.
 
-4. Launch with the Podman override:
+4. Render and inspect the merged configuration before starting anything. Confirm the portal service has the rootless Podman socket mounted at `/var/run/docker.sock`, `DOCKER_SOCKET=/var/run/docker.sock`, and `label=disable`:
+
+   ```bash
+   podman compose -f docker-compose.yml -f compose.podman.yaml config
+   ```
+
+   If the rendered configuration still mounts the host Docker socket, stop and do not launch it.
+
+5. Launch with the Podman override:
 
    ```bash
    podman compose -f docker-compose.yml -f compose.podman.yaml up -d --build
